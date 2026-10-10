@@ -2,7 +2,7 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 const filenameOrder = new Intl.Collator('en', {numeric:true, sensitivity:'base'});
-function compareFilenames(a,b) {
+export function compareFilenames(a,b) {
   return filenameOrder.compare(a,b) || (a < b ? -1 : a > b ? 1 : 0);
 }
 

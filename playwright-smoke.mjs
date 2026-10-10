@@ -53,7 +53,16 @@ try {
   await runUpload(options);
   assert.equal(uploads,3,'resume should not re-upload completed files');
   assert.equal(await page.getByRole('textbox',{name:'Chapter name',exact:true}).count(),3);
+  await page.evaluate(()=>localStorage.clear());await page.reload();
+  const events=[];
+  const paused=await runUpload({...options,statePath:path.join(folder,'pause.json'),shouldPause:()=>uploads>=4,onEvent:event=>events.push(event)});
+  assert.equal(paused.paused,true);
+  assert.equal(uploads,4,'pause should complete one file before stopping');
+  assert.equal(events.filter(e=>e.type==='item'&&e.status==='uploaded').length,1);
+  await runUpload({...options,statePath:path.join(folder,'pause.json')});
+  assert.equal(uploads,6,'resume should upload only the remaining two files');
   console.log('PASS: real Playwright added/uploaded three rows, reloaded, and resumed without duplicates.');
+  console.log('PASS: pause completed the current file, released the lock, and resumed the remaining files.');
 } finally {
   await browser?.close(); await new Promise(resolve=>server.close(resolve));
   await rm(folder,{recursive:true,force:true});

@@ -1,5 +1,70 @@
 # ACX batch uploader
 
+## macOS app prototype
+
+The first SwiftUI app lives in `app/`. Build a local app bundle with:
+
+```sh
+npm install
+bash scripts/build-app.sh
+open 'dist/ACX Batcher.app'
+```
+
+Requires macOS 14+, Xcode/Swift for building, Google Chrome, and Node.js 20+
+installed at `/opt/homebrew/bin/node` or `/usr/local/bin/node`. This development
+bundle includes the JavaScript engine and Playwright but **does not yet bundle
+Node.js**. It is ad-hoc signed for local use, not notarized for distribution.
+
+Choose a project in the app's Chrome window, open its finished-audio page, then
+click **Use this project**. Alternatively paste the title URL. Add MP3s or folders
+using drag-and-drop or the picker. Every MP3 is included; subfolders are not
+searched. Imports append in natural filename order. Edit titles inline and drag
+rows to reorder (or use the context menu). The prefix checkbox regenerates all
+display titles from filenames, so use it before custom title edits.
+
+**Check ACX project** previews Add / Upload / Skip and lists existing sections,
+including unrelated rows. Review this before clicking **Start upload**. New files
+append to the chapter list. **Pause after current file** waits for upload and
+analysis before stopping. To resume, check the project again. Titles and order
+lock when a batch starts. The app prevents idle system sleep during uploads and
+refuses to quit mid-operation; pause and wait, then quit. Progress is verified
+after a reload; the app never submits an audiobook for review.
+
+Saved batches, journals, and the app's separate Chrome login profile live under
+`~/Library/Application Support/ACXBatcher/`. This does not use the CLI's existing
+`.acx-profile`, so sign into ACX once in the app's window. Current CLI uploads are
+not imported into the app automatically. Do not run the app and CLI against the
+same ACX project at the same time.
+
+First-version scope: chapter-list uploads, including individual books' credits.
+Separate collection opening/closing-credit and retail-sample slots still need
+to be filled in ACX. Multi-project scheduling, parallel uploads, runtime bundling,
+notarization, and app updates are future work.
+
+### Architecture
+
+- `app/Sources/ACXBatcher/`: SwiftUI interface, saved batches, process bridge.
+- `desktop-engine.mjs`: JSON-lines commands/events over stdin/stdout; owns Chrome.
+- `acx-page.mjs`: ACX selectors, project inspection, row actions, status detection.
+- `uploader.mjs`: sequential batch execution, journaling, resume, pause, progress.
+- `plan.mjs`: local file metadata, filename sorting, display-title cleanup.
+- `cli.mjs`: existing command-line entry point, still supported.
+
+The app and CLI share the same adapter and upload engine. ACX layout changes
+should be handled in `acx-page.mjs`. Local browser tests use a simulated page and
+never upload to ACX. `npm test` also exercises the desktop engine protocol.
+
+Prototype validation: Swift release build succeeds; all seven Node tests and the
+real-Chrome fixture test pass, including pause after one file and resume without
+duplicates. Native UI checks imported the full 116-file DR2 folder, edited titles,
+toggled prefix cleanup, reordered/restored rows, and verified the saved draft
+reappeared after restarting the app. Live uploads from the Swift app have not
+been run; the earlier live tests used the shared engine through the CLI/browser
+connection. Drag-and-drop is implemented; the native file picker was used for
+the manual import test.
+
+## Command-line tool
+
 A local Node.js + Playwright script. No AI model or API key is needed to run it.
 It adds chapters, names them, uploads one MP3 at a time, waits for the audio player
 and matching filename, and verifies the files remain after a page reload.

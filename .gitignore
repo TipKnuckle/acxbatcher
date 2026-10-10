@@ -10,3 +10,5 @@ artifacts/
 !/package-lock.json
 *.state.json.tmp
 .DS_Store
+app/.build/
+dist/
