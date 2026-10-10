@@ -1,0 +1,12 @@
+node_modules/
+.acx-profile/
+*.state.json
+*.lock
+artifacts/
+
+# Local upload plans and progress (keep package manifests tracked).
+/*.json
+!/package.json
+!/package-lock.json
+*.state.json.tmp
+.DS_Store

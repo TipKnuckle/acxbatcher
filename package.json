@@ -1,0 +1,7 @@
+{
+  "name": "acx-batch-uploader",
+  "private": true,
+  "type": "module",
+  "scripts": {"test": "node --test", "test:browser": "node playwright-smoke.mjs", "acx": "node cli.mjs"},
+  "dependencies": {"playwright": "1.64.0"}
+}
