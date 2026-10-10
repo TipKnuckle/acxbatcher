@@ -35,7 +35,7 @@ let browser;
 try {
   for(let n=1;n<=3;n++) await writeFile(path.join(folder,`Book - Chapter ${n}.mp3`),'test fixture');
   const plan=await makePlan(folder,'https://www.acx.com/titleview/TEST');
-  browser=await chromium.launch({channel:'chrome',headless:true});
+  browser=await chromium.launch({channel:'chrome',headless:true,chromiumSandbox:true});
   const page=await browser.newPage();
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   assert.equal(await waitForUploadPage(page,page.url()),true);

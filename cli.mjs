@@ -29,7 +29,7 @@ try {
       const { runUpload } = await import('./uploader.mjs');
       const profile = path.resolve(values.profile || '.acx-profile');
       await mkdir(profile, {recursive:true,mode:0o700});
-      const context = await chromium.launchPersistentContext(profile, {channel:'chrome',headless:false});
+      const context = await chromium.launchPersistentContext(profile, {channel:'chrome',headless:false,chromiumSandbox:true});
       try {
         const page = context.pages()[0] || await context.newPage();
         page.setDefaultTimeout(30000);

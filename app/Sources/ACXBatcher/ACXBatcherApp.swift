@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var showLog = false
     @State private var showExisting = false
     @State private var targeted = false
+    @State private var batchToDelete: Batch?
     private let accent = Color(red: 0.12, green: 0.43, blue: 0.38)
     var body: some View {
         NavigationSplitView {
@@ -50,9 +51,20 @@ struct ContentView: View {
                             Text("\(batch.items.count) files · \(batch.completed ? "Complete" : batch.started ? "In progress" : "Draft")")
                                 .font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 6).tag(batch.id)
+                        .contextMenu {
+                            Button("Delete batch…", role: .destructive) { batchToDelete = batch }
+                                .disabled(store.busy)
+                        }
                     }
                 }.listStyle(.sidebar).disabled(store.busy)
-                Button(action: store.newBatch) { Label("New batch", systemImage: "plus") }.disabled(store.busy)
+                HStack {
+                    Button(action: store.newBatch) { Label("New batch", systemImage: "plus") }.disabled(store.busy)
+                    Spacer()
+                    Button { batchToDelete = store.batch } label: { Image(systemName: "trash") }
+                        .help("Delete selected batch")
+                        .accessibilityLabel("Delete selected batch")
+                        .disabled(store.busy || store.batch == nil)
+                }
                 Text("Local files. Your Chrome session.\nNo AI or API keys.").font(.caption).foregroundStyle(.secondary).padding(.bottom, 12)
             }.padding(.horizontal, 14).navigationSplitViewColumnWidth(230)
         } detail: {
@@ -66,6 +78,13 @@ struct ContentView: View {
                 .overlay { if targeted && store.editable { RoundedRectangle(cornerRadius: 14).stroke(accent, style: StrokeStyle(lineWidth: 3, dash: [8])).padding(8).allowsHitTesting(false) } }
         }
         .tint(accent)
+        .alert("Delete batch?", isPresented: Binding(get: { batchToDelete != nil }, set: { if !$0 { batchToDelete = nil } }), presenting: batchToDelete) { batch in
+            Button("Cancel", role: .cancel) { batchToDelete = nil }
+            Button("Delete batch", role: .destructive) { store.deleteBatch(batch.id); batchToDelete = nil }
+                .disabled(store.busy)
+        } message: { batch in
+            Text("Remove “\(batch.name)” from your saved batches? Audio files and uploads already on ACX stay in place. This batch will no longer be available to resume in the app.")
+        }
         .sheet(isPresented: $showLog) {
             VStack(alignment: .leading) {
                 HStack { Text("Activity").font(.title2.bold()); Spacer(); Button("Done") { showLog = false } }
@@ -111,12 +130,12 @@ struct ContentView: View {
                     TextField("Or paste an ACX project link", text: Binding(get: {store.batch?.url ?? ""}, set: store.setURL)).textFieldStyle(.plain).disabled(!store.editable)
                 }.padding(9).background(.background, in: RoundedRectangle(cornerRadius: 6))
             }.padding(10)
-        } label: { Label("1  PROJECT", systemImage: "book.closed").font(.caption.bold()).foregroundStyle(.secondary) }
+        } label: { Label("PROJECT", systemImage: "book.closed").font(.caption.bold()).foregroundStyle(.secondary) }
     }
     private var files: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("2  AUDIO FILES", systemImage: "waveform").font(.caption.bold()).foregroundStyle(.secondary)
+                Label("AUDIO FILES", systemImage: "waveform").font(.caption.bold()).foregroundStyle(.secondary)
                 Spacer()
                 Text("\(store.batch?.items.count ?? 0) files").foregroundStyle(.secondary)
                 Button("Add files or folder…", action: store.pickFiles).disabled(!store.editable || !store.engineReady)
@@ -184,16 +203,18 @@ struct ContentView: View {
                 if store.checked { Button("Existing sections (\(store.remote.count))") { showExisting = true } }
                 Spacer()
                 if store.uploading {
+                    Button("Stop batch", action: store.cancelUpload)
+                        .help("Stop waiting and prevent further uploads. The current file may still finish in Chrome.")
                     Button(store.pauseRequested ? "Pausing after this file…" : "Pause after current file", action: store.pause).disabled(store.pauseRequested)
                 } else {
                     Button("Check ACX project", action: store.preflight).disabled(store.busy || !store.engineReady || store.batch?.url.isEmpty != false || store.batch?.items.isEmpty != false)
-                    Button(store.batch?.started == true ? "Resume upload" : "Start upload", action: store.start).buttonStyle(.borderedProminent).disabled(store.busy || !store.checked)
+                    Button(store.batch?.started == true ? "Resume upload" : "Start upload", action: store.start).buttonStyle(.borderedProminent).disabled(store.busy || !store.engineReady || (!store.checked && store.batch?.started != true))
                 }
             }
         }
     }
     private func statusLabel(_ status: String?) -> String {
-        switch status { case "uploaded": return "Uploaded"; case "skip": return "Skip"; case "uploading": return "Uploading…"; case "add": return "Add"; case "upload": return "Upload"; default: return "Ready" }
+        switch status { case "uploaded": return "Uploaded"; case "skip": return "Skip"; case "uploading": return "Uploading…"; case "interrupted": return "Check on resume"; case "waiting": return "Processing"; case "add": return "Add"; case "upload": return "Upload"; default: return "Ready" }
     }
     private func importDrop(_ providers: [NSItemProvider]) -> Bool {
         guard store.editable else { return false }

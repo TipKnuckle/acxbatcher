@@ -1,15 +1,19 @@
 import { readFile, writeFile, rename, open, unlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import {setTimeout as delay} from 'node:timers/promises';
 import { validatePlan } from './plan.mjs';
 import {createACXPage,readRows,rowStatus} from './acx-page.mjs';
 export {readRows,rowStatus};
 
-export async function until(read, description, timeoutMs=60000) {
+export async function until(read, description, timeoutMs=60000, signal) {
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
+    signal?.throwIfAborted();
     const result = await read();
+    signal?.throwIfAborted();
     if (result) return result;
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    try { await delay(Math.min(1500, Math.max(1, end-Date.now())), undefined, {signal}); }
+    catch(error) { signal?.throwIfAborted(); throw error; }
   }
   throw new Error(`Timed out waiting for ${description}. Stop and inspect ACX before resuming.`);
 }
@@ -22,7 +26,8 @@ export function checkOrder(existing,plan) {
   if(matched.length && existing.slice(-matched.length).some((x,i)=>x.title!==matched[i].title)) throw new Error('Planned chapters must be the last existing rows before appending.');
 }
 
-export async function runUpload({page,plan,statePath,currentUrl,reload,upload,adapter,log=console.log,timeoutMs=20*60*1000,shouldPause=()=>false,onEvent=()=>{}}) {
+export async function runUpload({page,plan,statePath,currentUrl,reload,upload,adapter,log=console.log,timeoutMs=20*60*1000,shouldPause=()=>false,onEvent=()=>{},signal}) {
+  const wait=(read,description,timeout)=>until(read,description,timeout,signal);
   const acx=adapter||createACXPage({page,currentUrl,reload,upload});
   await validatePlan(plan);
   if (await acx.url() !== plan.url) throw new Error('Browser is on a different title. Open the exact plan URL.');
@@ -48,6 +53,7 @@ export async function runUpload({page,plan,statePath,currentUrl,reload,upload,ad
     }
     checkOrder(existing,plan);
     for (const [index,item] of plan.items.entries()) {
+      signal?.throwIfAborted();
       if(shouldPause()) {onEvent({type:'paused'});return {...state,paused:true};}
       if (await acx.url() !== plan.url) throw new Error('Browser left the intended title.');
       let rows = await acx.listSections();
@@ -55,17 +61,21 @@ export async function runUpload({page,plan,statePath,currentUrl,reload,upload,ad
       if (rowIndex < 0) {
         if (state.chapters[item.title]) throw new Error(`Recorded chapter is missing: ${item.title}. Reconcile manually before resuming.`);
         state.pendingAdd={title:item.title,count:rows.length}; await save();
+        signal?.throwIfAborted();
         await acx.addSection();
-        rows=await until(async()=>{const r=await acx.listSections(); return r.length===rows.length+1 ? r : false;},'new chapter');
+        rows=await wait(async()=>{const r=await acx.listSections(); return r.length===rows.length+1 ? r : false;},'new chapter');
         rowIndex=rows.length-1;
         await acx.nameSection(rowIndex,item.title);
-        await until(async()=> (await acx.listSections())[rowIndex]?.title===item.title,'chapter name');
+        await wait(async()=> (await acx.listSections())[rowIndex]?.title===item.title,'chapter name');
         delete state.pendingAdd;
         state.chapters[item.title]={status:'created',file:item.file}; await save();
       }
       const readRow=async()=> (await acx.listSections()).find(r=>r.title===item.title);
       let status=acx.status(await readRow(),item.file);
-      if (status==='busy') status=await until(async()=>{const s=acx.status(await readRow(),item.file);return s==='busy'?false:s;},'existing upload',timeoutMs);
+      if (status==='busy') {
+        onEvent({type:'item',file:item.file,status:'uploading'});
+        status=await wait(async()=>{const s=acx.status(await readRow(),item.file);return s==='busy'?false:s;},'existing upload',timeoutMs);
+      }
       if (status==='uploaded') {
         log(`[${index+1}/${plan.items.length}] Already uploaded: ${item.title}`);
         state.chapters[item.title]={status:'uploaded',file:item.file}; await save(); onEvent({type:'item',file:item.file,status:'uploaded'}); continue;
@@ -75,8 +85,9 @@ export async function runUpload({page,plan,statePath,currentUrl,reload,upload,ad
       state.chapters[item.title]={status:'uploading',file:item.file}; await save();
       log(`[${index+1}/${plan.items.length}] Uploading: ${item.title}`);
       onEvent({type:'item',file:item.file,status:'uploading'});
+      signal?.throwIfAborted();
       await acx.uploadFile(rowIndex,item.file);
-      await until(async()=>{
+      await wait(async()=>{
         const row=await readRow(), status=acx.status(row,item.file);
         if(status==='error') throw new Error(`ACX reported a problem with ${item.title}: ${row.text}`);
         return status==='uploaded';
@@ -85,9 +96,10 @@ export async function runUpload({page,plan,statePath,currentUrl,reload,upload,ad
       log(`Confirmed: ${item.title}`);
       onEvent({type:'item',file:item.file,status:'uploaded'});
     }
+    signal?.throwIfAborted();
     await acx.reload();
     await acx.ready();
-    await until(async()=>{
+    await wait(async()=>{
       const rows=await acx.listSections();
       return plan.items.every(item=>acx.status(rows.find(r=>r.title===item.title),item.file)==='uploaded');
     },'uploaded chapters to persist after reload');

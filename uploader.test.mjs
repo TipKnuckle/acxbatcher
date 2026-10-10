@@ -1,12 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,rm,readFile} from 'node:fs/promises';
+import {mkdtemp,writeFile,rm,readFile,access} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {makePlan,validatePlan,displayTitle} from './plan.mjs';
 import {rowStatus,runUpload} from './uploader.mjs';
 
 const url='https://www.acx.com/titleview/A1VMOLSQ4F8VZQ';
+for (const stop of ['timeout','cancel']) {
+  test(`${stop} releases lock; resume recognizes completed upload without sending it twice`,()=>fixture(async folder=>{
+    await writeFile(path.join(folder,'Chapter 1.mp3'),'audio');
+    const plan=await makePlan(folder,url), item=plan.items[0];
+    let status='empty', uploads=0;
+    const controller=new AbortController();
+    const adapter={
+      url:()=>url,ready:async()=>{},reload:async()=>{},
+      listSections:async()=>[{title:item.title}],status:()=>status,
+      uploadFile:async()=>{uploads++;status='busy';if(stop==='cancel') controller.abort(new Error('Stopped by user'));}
+    };
+    const statePath=path.join(folder,'state.json');
+    const options={plan,statePath,adapter,timeoutMs:5,signal:controller.signal,log:()=>{}};
+    await assert.rejects(runUpload(options),stop==='cancel'?/Stopped by user/:/Timed out/);
+    await assert.rejects(access(statePath+'.lock'),{code:'ENOENT'});
+    status='uploaded';
+    await runUpload({...options,signal:undefined});
+    assert.equal(uploads,1);
+    assert.equal(JSON.parse(await readFile(statePath,'utf8')).chapters[item.title].status,'uploaded');
+  }));
+}
 test('display titles strip only the opening numeric prefix and separator',()=>{
   assert.equal(displayTitle('001 - DR6 - Reckoning - Credits - Open.mp3'),'DR6 - Reckoning - Credits - Open');
   for(const separator of ['-', '–', '—', '_', '.']) {

@@ -34,6 +34,11 @@ import UniformTypeIdentifiers
         } catch { self.error = "Could not load saved batches: \(error.localizedDescription)" }
         if batches.isEmpty { batches = [Batch()] }
         selectedID = batches.first?.id
+        for i in batches.indices {
+            for file in Array(batches[i].statuses.keys) where batches[i].statuses[file] == "uploading" {
+                batches[i].statuses[file] = "interrupted"
+            }
+        }
         launchEngine()
     }
     var index: Int? { batches.firstIndex { $0.id == selectedID } }
@@ -50,6 +55,24 @@ import UniformTypeIdentifiers
     func newBatch() {
         guard !busy else { return }
         let item = Batch(); batches.insert(item, at: 0); selectedID = item.id; changed()
+    }
+    func deleteBatch(_ id: String) {
+        guard !busy, let position = batches.firstIndex(where: { $0.id == id }) else { return }
+        var remaining = batches
+        remaining.remove(at: position)
+        if remaining.isEmpty { remaining = [Batch()] }
+        do {
+            try JSONEncoder().encode(remaining).write(to: support.appendingPathComponent("batches.json"), options: .atomic)
+        } catch {
+            self.error = "Could not delete batch: \(error.localizedDescription)"
+            return
+        }
+        batches = remaining
+        if selectedID == id {
+            selectedID = remaining[min(position, remaining.count - 1)].id
+            checked = false; remote = []; logs = []; error = nil
+            message = "Batch deleted. Choose a batch or add your audio."
+        }
     }
     func setTitle(_ file: String, _ title: String) {
         guard editable, let i = index, let j = batches[i].items.firstIndex(where: {$0.file == file}) else { return }
@@ -95,10 +118,22 @@ import UniformTypeIdentifiers
     func captureProject() { send("project") }
     func preflight() { guard let batch else { return }; sendPlan("preflight", batch) }
     func start() {
-        guard checked, let batch else { return }
+        guard !busy, let batch, checked || batch.started else { return }
         pauseRequested = false; sendPlan("start", batch)
     }
     func pause() { pauseRequested = true; send("pause", exclusive: false) }
+    func cancelUpload() {
+        guard uploading else { return }
+        send("cancel", exclusive: false)
+        message = "Stopping the batch. The current file may still finish in Chrome."
+    }
+    private func markInterrupted() {
+        guard let i = index else { return }
+        for file in Array(batches[i].statuses.keys) where batches[i].statuses[file] == "uploading" {
+            batches[i].statuses[file] = "interrupted"
+        }
+        save()
+    }
     private func sendPlan(_ action: String, _ batch: Batch) {
         do {
             let plan = try JSONSerialization.jsonObject(with: JSONEncoder().encode(batch.plan))
@@ -144,7 +179,7 @@ import UniformTypeIdentifiers
         }
         process.terminationHandler = { [weak self] process in
             Task { @MainActor in
-                guard let self else { return }; self.engineReady = false; self.busy = false; self.uploading = false; self.endActivity()
+                guard let self else { return }; self.engineReady = false; self.busy = false; self.uploading = false; self.checked = false; self.markInterrupted(); self.endActivity()
                 if process.terminationStatus != 0 { self.error = "Upload engine stopped. See the activity log; saved progress will be checked on resume." }
             }
         }
@@ -170,14 +205,24 @@ import UniformTypeIdentifiers
         if type == "item", let file = event["file"] as? String, let status = event["status"] as? String, let i = index {
             batches[i].statuses[file] = status; save(); return
         }
-        if type == "pauseRequested" { message = "Will pause after the current file finishes."; return }
+        if type == "pauseRequested" || type == "cancelRequested" {
+            actions.removeValue(forKey: event["id"] as? String ?? "")
+            message = type == "pauseRequested" ? "Will pause after the current file finishes." : "Stopping the batch. The current file may still finish in Chrome."
+            return
+        }
         if type == "paused" { message = "Paused. Check the project to resume."; return }
         guard type == "result" || type == "error" else { return }
         let action = event["action"] as? String ?? actions[event["id"] as? String ?? ""] ?? ""
         actions.removeValue(forKey: event["id"] as? String ?? "")
         busy = false
         if action == "start" { uploading = false; endActivity(); checked = false }
-        if type == "error" { error = event["message"] as? String ?? "Unknown error"; appendLog(error!); return }
+        if type == "error" {
+            if action == "start" {
+                markInterrupted()
+                message = "Upload stopped. Resume upload will check ACX and skip completed files."
+            }
+            error = event["message"] as? String ?? "Unknown error"; appendLog(error!); return
+        }
         if action == "import", let data = event["data"], let i = index {
             do {
                 let added = try JSONDecoder().decode([AudioItem].self, from: JSONSerialization.data(withJSONObject: data))

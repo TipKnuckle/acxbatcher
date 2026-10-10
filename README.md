@@ -25,10 +25,17 @@ display titles from filenames, so use it before custom title edits.
 **Check ACX project** previews Add / Upload / Skip and lists existing sections,
 including unrelated rows. Review this before clicking **Start upload**. New files
 append to the chapter list. **Pause after current file** waits for upload and
-analysis before stopping. To resume, check the project again. Titles and order
+analysis before stopping. **Stop batch** cancels waiting and prevents further
+uploads; the current file may still finish in Chrome. After a timeout or stop,
+**Resume upload** checks ACX automatically and skips completed files. Titles and order
 lock when a batch starts. The app prevents idle system sleep during uploads and
 refuses to quit mid-operation; pause and wait, then quit. Progress is verified
 after a reload; the app never submits an audiobook for review.
+
+Delete saved batches with the sidebar trash button or right-click menu. This
+leaves source audio and ACX uploads intact. Deletion is disabled during operations.
+The app and CLI enable Chrome's sandbox; Chrome may still show its normal
+automation notice.
 
 Saved batches, journals, and the app's separate Chrome login profile live under
 `~/Library/Application Support/ACXBatcher/`. This does not use the CLI's existing
@@ -54,7 +61,8 @@ The app and CLI share the same adapter and upload engine. ACX layout changes
 should be handled in `acx-page.mjs`. Local browser tests use a simulated page and
 never upload to ACX. `npm test` also exercises the desktop engine protocol.
 
-Prototype validation: Swift release build succeeds; all seven Node tests and the
+Prototype validation: Swift release build succeeds; all nine Node tests (including
+timeout/cancel recovery without duplicate uploads) and the sandbox-enabled
 real-Chrome fixture test pass, including pause after one file and resume without
 duplicates. Native UI checks imported the full 116-file DR2 folder, edited titles,
 toggled prefix cleanup, reordered/restored rows, and verified the saved draft

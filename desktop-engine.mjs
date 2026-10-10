@@ -12,9 +12,10 @@ if(!home || !path.isAbsolute(home)) throw new Error('An absolute application-sup
 await mkdir(home,{recursive:true,mode:0o700});
 const emit=event=>process.stdout.write(JSON.stringify(event)+'\n');
 let context,page,busy=false,pause=false,running=false,quitting=false;
+let uploadController;
 async function browserPage() {
   if(!context) {
-    context=await chromium.launchPersistentContext(path.join(home,'Chrome'),{channel:'chrome',headless:false,viewport:null});
+    context=await chromium.launchPersistentContext(path.join(home,'Chrome'),{channel:'chrome',headless:false,viewport:null,chromiumSandbox:true});
     context.on('close',()=>{context=undefined;page=undefined;emit({type:'browserClosed'});});
   }
   if(!page || page.isClosed()) page=context.pages()[0]||await context.newPage();
@@ -33,8 +34,8 @@ async function inspect(plan) {
   const items=plan.items.map(item=>{
     const row=rows.find(r=>r.title===item.title);
     const status=rowStatus(row,item.file);
-    if(!['missing','empty','uploaded'].includes(status)) throw new Error(`${item.title}: ACX reports ${status}. Inspect this row in Chrome.`);
-    return {file:item.file,title:item.title,status:status==='missing'?'add':status==='empty'?'upload':'skip'};
+    if(!['missing','empty','uploaded','busy'].includes(status)) throw new Error(`${item.title}: ACX reports ${status}. Inspect this row in Chrome.`);
+    return {file:item.file,title:item.title,status:status==='missing'?'add':status==='empty'?'upload':status==='busy'?'waiting':'skip'};
   });
   const names=new Set(plan.items.map(i=>i.title));
   return {project:await getProject(p),items,existing:rows.map(row=>({title:row.title,inPlan:names.has(row.title)})),unrelated:rows.filter(r=>!names.has(r.title)).length};
@@ -43,6 +44,10 @@ async function command(message) {
   const {id,action}=message;
   if(message.plan) message.plan={version:message.plan.version,url:message.plan.url,items:message.plan.items.map(item=>({title:item.title,file:item.file,bytes:item.bytes,mtimeMs:item.mtimeMs}))};
   if(action==='pause') {pause=true;emit({id,type:'pauseRequested'});return;}
+  if(action==='cancel') {
+    uploadController?.abort(new Error('Stopped waiting. The current file may still be processing in Chrome. Resume will check ACX before uploading anything.'));
+    emit({id,type:'cancelRequested'});return;
+  }
   if(action==='shutdown') {quitting=true;pause=true;if(!busy){await context?.close();process.exit(0);}return;}
   if(busy) {emit({id,type:'error',message:'Finish the current operation first.'});return;}
   busy=true;
@@ -88,16 +93,16 @@ async function command(message) {
         const saved=JSON.parse(await readFile(file,'utf8'));
         if(JSON.stringify(saved)!==JSON.stringify(message.plan)) throw new Error('This batch changed after starting. Create a new batch rather than changing its saved plan.');
       } catch(error) {if(error.code!=='ENOENT') throw error;await writeFile(file,JSON.stringify(message.plan,null,2),{mode:0o600});}
-      pause=false;running=true;
+      pause=false;running=true;uploadController=new AbortController();
       emit({type:'started'});
       const result=await runUpload({page,plan:message.plan,statePath:file+'.state.json',currentUrl:()=>page.url(),reload:()=>page.reload(),
-        shouldPause:()=>pause,onEvent:emit,log:message=>emit({type:'log',message}),
+        shouldPause:()=>pause,signal:uploadController.signal,onEvent:emit,log:message=>emit({type:'log',message}),
         upload:async(button,file)=>{const [chooser]=await Promise.all([page.waitForEvent('filechooser'),button.click()]);await chooser.setFiles(file);}});
       running=false;data={paused:!!result.paused};
     } else throw new Error(`Unknown command: ${action}`);
     emit({id,type:'result',action,data});
   } catch(error) {running=false;emit({id,type:'error',action,message:error.message});}
-  finally {busy=false;if(quitting){await context?.close();process.exit(0);}}
+  finally {uploadController=undefined;busy=false;if(quitting){await context?.close();process.exit(0);}}
 }
 const input=createInterface({input:process.stdin});
 input.on('line',line=>{try {void command(JSON.parse(line)).catch(error=>emit({type:'error',message:error.message}));}catch(error){emit({type:'error',message:error.message});}});
